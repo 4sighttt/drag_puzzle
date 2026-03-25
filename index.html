@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Puzzle</title>
+<style>
+html,body{
+  margin:0;
+  height:100%;
+  background:#111;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  user-select:none;
+}
+#board{
+  position:relative;
+  background:#000;
+}
+#preview{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  display:none;
+  object-fit:cover;
+}
+.piece{
+  position:absolute;
+  box-sizing:border-box;
+  border:1px solid rgba(255,255,255,0.25);
+  background-repeat:no-repeat;
+  cursor:grab;
+}
+.piece.dragging{
+  cursor:grabbing;
+  z-index:10;
+}
+</style>
+</head>
+<body>
+
+<div id="board">
+  <img id="preview" alt="">
+</div>
+
+<script>
+const board = document.getElementById("board");
+const preview = document.getElementById("preview");
+
+let gridSize = 4;
+let pieces = [];
+let cellSize = 0;
+let boardSize = 0;
+
+let pendingImageSrc = null; // square image (dataURL) sized to boardSize
+
+// H-toggle auto hint
+let hintTimer = null;
+const HINT_INTERVAL_MS = 3000;
+
+function computeBoardSize(){
+  const vmin = Math.min(window.innerWidth, window.innerHeight);
+  boardSize = Math.min(900, Math.floor(vmin * 0.80));
+  boardSize = Math.floor(boardSize / gridSize) * gridSize; // pixel-perfect tiling
+  board.style.width = boardSize + "px";
+  board.style.height = boardSize + "px";
+  cellSize = boardSize / gridSize;
+}
+
+function shuffle(arr){
+  for(let i=arr.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]]=[arr[j],arr[i]];
+  }
+}
+
+function centerCropToBoard(img){
+  const size = Math.min(img.width,img.height);
+  const sx = (img.width-size)/2;
+  const sy = (img.height-size)/2;
+
+  const c = document.createElement("canvas");
+  c.width = boardSize;
+  c.height = boardSize;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(img, sx, sy, size, size, 0, 0, boardSize, boardSize);
+  return c.toDataURL();
+}
+
+function clearBoardPieces(){
+  stopAutoHint();
+  pieces = [];
+  [...board.querySelectorAll(".piece")].forEach(el => el.remove());
+}
+
+function showPreview(src){
+  preview.src = src;
+  preview.style.display = "block";
+}
+
+function hidePreview(){
+  preview.style.display = "none";
+}
+
+function initPuzzle(src){
+  computeBoardSize();
+  clearBoardPieces();
+  hidePreview();
+
+  const total = gridSize * gridSize;
+  const positions = [...Array(total).keys()];
+  shuffle(positions);
+
+  // Avoid starting solved (rare) by reshuffling if fully solved
+  let solved = true;
+  for(let i=0;i<positions.length;i++){
+    if(positions[i] !== i){ solved = false; break; }
+  }
+  if(solved) shuffle(positions);
+
+  positions.forEach((pos,i)=>{
+    const piece = document.createElement("div");
+    piece.className="piece";
+
+    const correctRow = Math.floor(i/gridSize);
+    const correctCol = i%gridSize;
+
+    const row = Math.floor(pos/gridSize);
+    const col = pos%gridSize;
+
+    piece.style.width = cellSize+"px";
+    piece.style.height = cellSize+"px";
+
+    piece.style.left = col*cellSize+"px";
+    piece.style.top  = row*cellSize+"px";
+
+    piece.style.backgroundImage = `url(${src})`;
+    piece.style.backgroundSize = boardSize+"px "+boardSize+"px";
+    piece.style.backgroundPosition = `-${correctCol*cellSize}px -${correctRow*cellSize}px`;
+
+    piece.dataset.correct = i;
+    piece.dataset.cell = pos;
+
+    board.appendChild(piece);
+    pieces.push(piece);
+
+    enableDrag(piece);
+  });
+}
+
+function getNearestCell(clientX,clientY){
+  const rect = board.getBoundingClientRect();
+  const col = Math.min(gridSize-1,Mathmax0(Math.floor((clientX-rect.left)/cellSize)));
+  const row = Math.min(gridSize-1,Mathmax0(Math.floor((clientY-rect.top)/cellSize)));
+  return row*gridSize + col;
+}
+function Mathmax0(v){ return Math.max(0,v); }
+
+function movePieceToCell(piece,cell){
+  const row = Math.floor(cell/gridSize);
+  const col = cell%gridSize;
+  piece.style.left = col*cellSize+"px";
+  piece.style.top  = row*cellSize+"px";
+  piece.dataset.cell = cell;
+}
+
+function enableDrag(piece){
+  let offsetX=0,offsetY=0;
+  let dragging=false;
+
+  piece.addEventListener("mousedown",e=>{
+    dragging=true;
+    piece.classList.add("dragging");
+    const rect = piece.getBoundingClientRect();
+    offsetX = e.clientX - rect.left;
+    offsetY = e.clientY - rect.top;
+  });
+
+  document.addEventListener("mousemove",e=>{
+    if(!dragging) return;
+
+    const rect = board.getBoundingClientRect();
+
+    let x = e.clientX - rect.left - offsetX;
+    let y = e.clientY - rect.top  - offsetY;
+
+    x = Math.max(0,Math.min(rect.width-cellSize,x));
+    y = Math.max(0,Math.min(rect.height-cellSize,y));
+
+    piece.style.left = x+"px";
+    piece.style.top  = y+"px";
+  });
+
+  document.addEventListener("mouseup",e=>{
+    if(!dragging) return;
+    dragging=false;
+    piece.classList.remove("dragging");
+
+    const targetCell = getNearestCell(e.clientX,e.clientY);
+    const currentCell = parseInt(piece.dataset.cell,10);
+
+    const other = pieces.find(p=>parseInt(p.dataset.cell,10)===targetCell);
+
+    if(other && other!==piece){
+      movePieceToCell(other,currentCell);
+    }
+    movePieceToCell(piece,targetCell);
+  });
+}
+
+function tryStartWithGrid(n){
+  if(!pendingImageSrc) return;
+  gridSize = n;
+  initPuzzle(pendingImageSrc);
+}
+
+function isSolved(){
+  for(const p of pieces){
+    if(parseInt(p.dataset.cell,10) !== parseInt(p.dataset.correct,10)) return false;
+  }
+  return true;
+}
+
+function autoHintStep(){
+  if(!pieces.length) return;
+  if(isSolved()){
+    stopAutoHint();
+    return;
+  }
+  const wrong = pieces.filter(p => parseInt(p.dataset.cell,10) !== parseInt(p.dataset.correct,10));
+  if(!wrong.length){
+    stopAutoHint();
+    return;
+  }
+  // Choose a random wrong piece; swap it into its correct cell
+  const piece = wrong[Math.floor(Math.random()*wrong.length)];
+  const correctCell = parseInt(piece.dataset.correct,10);
+  const currentCell = parseInt(piece.dataset.cell,10);
+
+  if(currentCell === correctCell) return;
+
+  const other = pieces.find(p => parseInt(p.dataset.cell,10) === correctCell);
+  if(other && other !== piece){
+    movePieceToCell(other,currentCell);
+  }
+  movePieceToCell(piece,correctCell);
+}
+
+function startAutoHint(){
+  if(hintTimer) return;
+  hintTimer = setInterval(autoHintStep, HINT_INTERVAL_MS);
+}
+
+function stopAutoHint(){
+  if(!hintTimer) return;
+  clearInterval(hintTimer);
+  hintTimer = null;
+}
+
+function toggleAutoHint(){
+  if(hintTimer) stopAutoHint();
+  else startAutoHint();
+}
+
+document.addEventListener("keydown", e => {
+  const k = e.key;
+
+  // 0: toggle original image overlay (preview) without changing puzzle state
+  if(k === "0"){
+    if(!pendingImageSrc) return;
+
+    const showing = preview.style.display !== "none";
+    if(showing){
+      hidePreview();
+      for(const p of pieces){ p.style.visibility = "visible"; }
+    }else{
+      showPreview(pendingImageSrc);
+      for(const p of pieces){ p.style.visibility = "hidden"; }
+    }
+    return;
+  }
+
+  // R: reshuffle current puzzle (same image + same grid)
+  if(k === "r" || k === "R"){
+    if(!pendingImageSrc) return;
+    if(!pieces.length) return; // only when a puzzle is running
+    hidePreview();
+    initPuzzle(pendingImageSrc);
+    return;
+  }
+
+  // H: auto-hint toggle
+  if(k === "h" || k === "H"){
+    toggleAutoHint();
+    return;
+  }
+
+  // 1..9: start puzzle with grid size
+  if(k.length === 1 && k >= "1" && k <= "9"){
+    tryStartWithGrid(parseInt(k,10));
+  }
+});
+
+document.addEventListener("dragover",e=>{ e.preventDefault(); });
+
+document.addEventListener("drop",e=>{
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if(!file || !file.type.startsWith("image")) return;
+
+  // Reset to waiting state: show preview after load
+  stopAutoHint();
+  gridSize = 4;
+  computeBoardSize();
+  clearBoardPieces();
+  pendingImageSrc = null;
+  hidePreview();
+
+  const reader = new FileReader();
+  reader.onload = ev=>{
+    const img = new Image();
+    img.onload = ()=>{
+      computeBoardSize();
+      pendingImageSrc = centerCropToBoard(img);
+      showPreview(pendingImageSrc); // show full image while waiting for number key
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+window.addEventListener("resize", ()=>{
+  const hadImage = !!pendingImageSrc;
+  const hadPieces = pieces.length > 0;
+
+  computeBoardSize();
+
+  if(hadPieces && pendingImageSrc){
+    initPuzzle(pendingImageSrc);
+  }else if(hadImage && pendingImageSrc){
+    showPreview(pendingImageSrc);
+  }
+});
+
+computeBoardSize();
+</script>
+
+</body>
+</html>
